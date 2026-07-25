@@ -18,7 +18,8 @@ const NAME_MAX = 12;
 const RATE_LIMIT = 15;       // submissions per minute per IP
 
 const BANNED = [
-  'fuck', 'shit', 'cunt', 'nigg', 'fag', 'rape', 'nazi', 'hitler', 'slut', 'whore',
+  'fuck', 'shit', 'cunt', 'nigger', 'nigga', 'niger', 'fag', 'rape', 'nazi', 'hitler',
+  'slut', 'whore', 'kike', 'spic', 'chink', 'tranny', 'retard', 'pedo', 'rapist',
 ];
 
 async function redis(commands) {
@@ -69,15 +70,34 @@ function buildBoard(flatScores, flatMeta) {
 
 const LEET = { 0: 'O', 1: 'I', 3: 'E', 4: 'A', 5: 'S', 7: 'T', 8: 'B', '@': 'A', $: 'S', '!': 'I' };
 
-// Compare against both the letters-only form and a de-leetspeaked one, so
-// "sh1t" and "f4ce" don't walk straight past the list.
+// A substring list loses to the obvious tricks: separators (f-u-c-k),
+// leetspeak (sh1t), doubled letters (NICCER) and lookalike consonants
+// (BLACNIGER). Squash all of that out before matching, on both sides.
+function normalize(s) {
+  return s
+    .toUpperCase()
+    .replace(/[0134578@$!]/g, (c) => LEET[c] || '')
+    .replace(/[^A-Z]/g, '')          // separators and spacing gone
+    .replace(/(.)\1+/g, '$1');       // NIGGER and NICCER collapse alike
+}
+
+// C/K/Q sub for G often enough that NICER has to compare equal to NIGER.
+const hardG = (s) => s.replace(/[CKQ]/g, 'G');
+
+const BANNED_PLAIN = [...new Set(BANNED.map(normalize))];
+const BANNED_SWAPPED = [...new Set(BANNED.map((w) => hardG(normalize(w))))];
+
 function isBanned(name) {
-  const letters = name.replace(/[^A-Z]/g, '');
-  const deleet = name.replace(/[0134578@$!]/g, (c) => LEET[c] || '').replace(/[^A-Z]/g, '');
-  return BANNED.some((word) => {
-    const w = word.toUpperCase();
-    return letters.includes(w) || deleet.includes(w);
-  });
+  const n = normalize(name);
+  if (BANNED_PLAIN.some((bad) => n.includes(bad))) return true;
+
+  // The consonant-swapped pass is deliberately weaker: a short swapped form
+  // must start the name, or MONICA -> MONIGA reads as a slur and every
+  // Monica, Veronica and Danica gets turned away.
+  const swapped = hardG(n);
+  return BANNED_SWAPPED.some((bad) => (
+    bad.length >= 5 ? swapped.includes(bad) : swapped.startsWith(bad)
+  ));
 }
 
 function cleanName(raw) {

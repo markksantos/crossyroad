@@ -81,13 +81,18 @@
 
   /* ---------- overlays ---------- */
   .overlay{
-    position:fixed; inset:0; display:grid; place-items:center;
+    position:fixed; inset:0;
+    /* flex + margin:auto (not place-items) so a tall card still scrolls
+       instead of being clipped at the top */
+    display:flex; align-items:center; justify-content:center;
+    overflow-y:auto; overscroll-behavior:contain; touch-action:auto;
     padding:24px; pointer-events:auto;
     background:rgba(12,35,52,.42); backdrop-filter:blur(3px);
     opacity:0; visibility:hidden; transition:opacity .28s ease, visibility .28s;
   }
   .overlay.show{ opacity:1; visibility:visible; }
   .card{
+    margin:auto; flex:0 0 auto;
     width:min(420px, 92vw); background:var(--card); border-radius:26px;
     box-shadow:var(--shadow); padding:30px 28px 26px; text-align:center;
     transform:translateY(14px) scale(.97); transition:transform .34s cubic-bezier(.22,1,.36,1);
@@ -140,7 +145,9 @@
   .msg.ok{ color:#1f9d55; }
   .msg.err{ color:var(--accent); }
 
-  .board{ list-style:none; text-align:left; }
+  .board{ list-style:none; text-align:left; overflow-y:auto; overscroll-behavior:contain; }
+  #overBoard{ max-height:34vh; }
+  #topBoard{ max-height:52vh; }
   .board-row{
     display:flex; align-items:center; gap:10px;
     padding:9px 12px; border-radius:12px; font-weight:800; font-size:15px;
@@ -226,7 +233,7 @@
     <div id="submitBlock" class="hidden">
       <div class="board-title">Add your score</div>
       <form class="submit-row" id="submitForm" autocomplete="off">
-        <input id="nameInput" placeholder="Your name" maxlength="10"
+        <input id="nameInput" placeholder="Your name" maxlength="12"
                aria-label="Your name" autocapitalize="characters" spellcheck="false" />
         <button class="btn" type="submit" id="submitBtn">Submit</button>
       </form>

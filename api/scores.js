@@ -14,7 +14,7 @@ const TOP_N = 10;
 
 const MAX_SCORE = 5000;      // sanity ceiling; nobody is hopping 5000 rows
 const MAX_COINS = 5000;
-const NAME_MAX = 10;
+const NAME_MAX = 12;
 const RATE_LIMIT = 15;       // submissions per minute per IP
 
 const BANNED = [
@@ -67,6 +67,19 @@ function buildBoard(flatScores, flatMeta) {
   return out;
 }
 
+const LEET = { 0: 'O', 1: 'I', 3: 'E', 4: 'A', 5: 'S', 7: 'T', 8: 'B', '@': 'A', $: 'S', '!': 'I' };
+
+// Compare against both the letters-only form and a de-leetspeaked one, so
+// "sh1t" and "f4ce" don't walk straight past the list.
+function isBanned(name) {
+  const letters = name.replace(/[^A-Z]/g, '');
+  const deleet = name.replace(/[0134578@$!]/g, (c) => LEET[c] || '').replace(/[^A-Z]/g, '');
+  return BANNED.some((word) => {
+    const w = word.toUpperCase();
+    return letters.includes(w) || deleet.includes(w);
+  });
+}
+
 function cleanName(raw) {
   const name = String(raw ?? '')
     .toUpperCase()
@@ -75,10 +88,7 @@ function cleanName(raw) {
     .trim()
     .slice(0, NAME_MAX);
   if (!name) return { error: 'Enter a name.' };
-  const flat = name.replace(/[^A-Z]/g, '');
-  if (BANNED.some((word) => flat.includes(word.toUpperCase()))) {
-    return { error: 'Pick a different name.' };
-  }
+  if (isBanned(name)) return { error: 'Pick a different name.' };
   return { name };
 }
 

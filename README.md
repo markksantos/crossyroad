@@ -1,7 +1,10 @@
 # Chicken Cross
 
-A complete Crossy Road clone in Three.js. No build step, no assets — every model is
-procedural boxes and every sound is a WebAudio oscillator.
+A complete Crossy Road clone in Three.js, with a global top-10 scoreboard.
+No build step, no assets — every model is procedural boxes and every sound is a
+WebAudio oscillator.
+
+**Live: https://crossyhop.vercel.app**
 
 ## Run
 
@@ -10,7 +13,9 @@ procedural boxes and every sound is a WebAudio oscillator.
 ```
 
 Any static server works; it must be served over http (ES modules + importmap won't
-load from `file://`).
+load from `file://`). A plain static server has no `/api`, so the scoreboard shows
+"Scoreboard offline" and the game stays fully playable. To develop against the live
+board, open `http://localhost:8181/?api=https://crossyhop.vercel.app/api/scores`.
 
 ## Controls
 
@@ -36,11 +41,37 @@ load from `file://`).
 - Rows are recycled behind the camera, so memory stays flat on a long run
   (~50 rows live, ~26 MB heap, 60 fps).
 
+## Scoreboard
+
+`GET /api/scores` returns the top 10; `POST /api/scores {name, score, coins}` submits
+a run. Storage is a Redis sorted set on **Upstash's free tier**, reached over its HTTPS
+REST API — no client library, no dependencies, nothing to install.
+
+- **One row per name, best score kept** (`ZADD … GT`), so a single player can't fill
+  the board. Names are uppercased and matched case-insensitively.
+- Server-side guards: name ≤ 12 chars from `[A-Z0-9 _-]`, a profanity blocklist that
+  also de-leetspeaks (`sh1t`, `f-u-c-k`), score/coin sanity ceilings, and a
+  15-submissions-per-minute-per-IP rate limit.
+- Names render via `textContent`, never `innerHTML`.
+
+### Deploying your own
+
+```bash
+vercel env add UPSTASH_REDIS_REST_URL production     # https://<db>.upstash.io
+vercel env add UPSTASH_REDIS_REST_TOKEN production
+vercel deploy --prod
+```
+
+`KV_REST_API_URL` / `KV_REST_API_TOKEN` are accepted as aliases. Keys are namespaced
+under `cc:`, so the database can be shared with other projects.
+
 ## Layout
 
 | File | Role |
 |---|---|
-| `index.html` | canvas, HUD, start / game-over cards, importmap |
+| `index.html` | canvas, HUD, start / game-over / leaderboard cards, importmap |
+| `api/scores.js` | scoreboard endpoint (Redis over REST) |
+| `src/leaderboard.js` | scoreboard client + board rendering |
 | `src/main.js` | renderer, camera rig, game loop, input, HUD wiring |
 | `src/world.js` | row generation, traffic / logs / trains, collision queries |
 | `src/player.js` | hop tweening, log riding, death animations |

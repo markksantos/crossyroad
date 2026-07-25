@@ -1,0 +1,8 @@
+{
+  "name": "chicken-cross",
+  "version": "1.0.0",
+  "private": true,
+  "description": "An endless hopper in Three.js with a replay-verified global scoreboard",
+  "type": "module",
+  "license": "MIT"
+}

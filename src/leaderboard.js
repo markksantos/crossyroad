@@ -1,15 +1,19 @@
 // Scoreboard client. Degrades quietly: if the API isn't reachable (e.g. the
-// game is being served by a plain static server), the board just stays hidden.
+// game is being served by a plain static server), the board stays hidden and
+// the game plays exactly as it otherwise would.
 
-const API = new URLSearchParams(location.search).get('api')
+const BASE = new URLSearchParams(location.search).get('api')
   || localStorage.getItem('cc_api')
-  || '/api/scores';
+  || '/api';
+
+const SCORES = BASE.endsWith('/scores') ? BASE : `${BASE.replace(/\/$/, '')}/scores`;
+const SESSION = SCORES.replace(/\/scores$/, '/session');
 
 export const savedName = () => localStorage.getItem('cc_name') || '';
 export const rememberName = (name) => localStorage.setItem('cc_name', name);
 
-async function call(options) {
-  const res = await fetch(API, options);
+async function call(url, options) {
+  const res = await fetch(url, options);
   let data = {};
   try {
     data = await res.json();
@@ -21,14 +25,46 @@ async function call(options) {
 }
 
 export function fetchTop() {
-  return call({ method: 'GET', headers: { Accept: 'application/json' } });
+  return call(SCORES, { method: 'GET', headers: { Accept: 'application/json' } });
 }
 
-export function submitScore({ name, score, coins }) {
-  return call({
+/**
+ * Ask the server for a signed world seed. Returns null when the scoreboard
+ * isn't available — the run then plays normally but can't be submitted.
+ */
+export async function startSession() {
+  try {
+    const data = await call(SESSION, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: '{}',
+    });
+    if (!data.seed || !data.sig) return null;
+    return data;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Submit a run for verification. We send what was pressed, not what it scored:
+ * the server replays the inputs against the seed it issued and derives the
+ * score itself.
+ */
+export function submitRun({ name, session, inputs, endTick }) {
+  return call(SCORES, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ name, score, coins }),
+    body: JSON.stringify({
+      name,
+      sessionId: session.sessionId,
+      seed: session.seed,
+      issuedAt: session.issuedAt,
+      rules: session.rules,
+      sig: session.sig,
+      inputs,
+      endTick,
+    }),
   });
 }
 

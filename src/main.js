@@ -1,12 +1,21 @@
-// Bootstrap: renderer, camera rig, game loop, input and HUD wiring.
+// Bootstrap: renderer, camera rig, fixed-step game loop, input and HUD.
+//
+// The simulation runs at exactly 60 Hz and every input is recorded against the
+// tick it landed on. That log is what gets submitted — the server replays it to
+// decide the score, so the number on screen is a prediction of the server's
+// answer, not a claim the server has to take on faith.
 
 import * as THREE from 'three';
-import { COLORS, EAGLE_MARGIN, TILE } from './constants.js';
-import { World } from './world.js';
-import { Player } from './player.js';
+import { COLORS, TILE, DT, EAGLE_MARGIN } from './constants.js';
+import { Game, DIRS } from './sim/game.js';
+import { MAX_INPUTS } from './sim/constants.js';
+import { WorldView } from './world.js';
+import { PlayerView } from './player.js';
 import * as M from './models.js';
 import { sfx, unlock, toggle as toggleSound, isEnabled } from './audio.js';
-import { fetchTop, submitScore, renderBoard, savedName, rememberName } from './leaderboard.js';
+import {
+  fetchTop, submitRun, startSession, renderBoard, savedName, rememberName,
+} from './leaderboard.js';
 
 /* ------------------------------------------------------------------ setup */
 
@@ -14,23 +23,22 @@ const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'hi
 renderer.setPixelRatio(Math.min(2, window.devicePixelRatio));
 renderer.setSize(window.innerWidth, window.innerHeight);
 renderer.shadowMap.enabled = true;
-renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+renderer.shadowMap.type = THREE.PCFShadowMap;
 document.body.appendChild(renderer.domElement);
 
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(COLORS.sky);
 scene.fog = new THREE.Fog(COLORS.sky, 34, 66);
 
-const VIEW = 11;                                     // vertical world units in frame
+const VIEW = 11;
+const MIN_WIDTH = 10.5;
 const camera = new THREE.OrthographicCamera(-1, 1, 1, -1, -40, 200);
-const CAM_OFFSET = new THREE.Vector3(4.6, 19, 15.5);   // slight yaw, ~50° tilt
+const CAM_OFFSET = new THREE.Vector3(4.6, 19, 15.5);
 scene.add(camera);
 
 const sun = new THREE.DirectionalLight(0xffffff, 1.05);
 sun.castShadow = true;
 sun.shadow.mapSize.set(2048, 2048);
-// Wide enough to cover everything on screen — a tight frustum leaves the
-// rest of the view stuck on the shadow map's clamped edge texel.
 sun.shadow.camera.left = -30;
 sun.shadow.camera.right = 30;
 sun.shadow.camera.top = 30;
@@ -41,13 +49,11 @@ sun.shadow.bias = -0.0012;
 sun.shadow.normalBias = 0.02;
 scene.add(sun);
 scene.add(sun.target);
-
 scene.add(new THREE.HemisphereLight(0xffffff, 0x88d0ff, 0.55));
 scene.add(new THREE.AmbientLight(0xffffff, 0.35));
 
-const world = new World(scene);
-const player = new Player(scene, world);
-
+const worldView = new WorldView(scene);
+const playerView = new PlayerView(scene);
 const eagle = M.makeEagle();
 eagle.visible = false;
 scene.add(eagle);
@@ -85,70 +91,79 @@ const REASONS = {
   eagle: 'Taken by the eagle',
 };
 
-let state = 'ready';          // ready | playing | over
+let state = 'ready';               // ready | playing | over
 let best = Number(localStorage.getItem('cc_best') || 0);
-let camAnchor = 0;
+let game = new Game('menu');
+let session = null;                // signed seed from the server, if any
+let inputs = [];                   // flat [tick, dirIndex, …]
+let pending = [];                  // inputs waiting for their tick
 let camX = 0;
-let scrollActive = false;
 let overTimer = 0;
 let shake = 0;
+let boardOpen = false;
 
 ui.best.textContent = `Best ${best}`;
 ui.sound.textContent = isEnabled() ? '🔊' : '🔇';
 
-function startGame() {
-  world.reset();
-  player.reset();
-  camAnchor = 0;
+function newRun(seed) {
+  game = new Game(seed);
+  inputs = [];
+  pending = [];
+  worldView.attach(game.world);
+  worldView.sync(0);
+  playerView.reset();
   camX = 0;
-  scrollActive = false;
   overTimer = 0;
   shake = 0;
   eagle.visible = false;
-  ui.score.textContent = '0';
-  ui.coins.textContent = '0';
+}
+
+async function startGame() {
+  unlock();
   ui.start.classList.remove('show');
   ui.over.classList.remove('show');
   closeBoard();
   ui.submitBlock.classList.add('hidden');
   ui.overBoardBlock.classList.add('hidden');
   message('', '');
+  ui.score.textContent = '0';
+  ui.coins.textContent = '0';
+
+  // A verified run needs a server-issued seed. Without one the game still
+  // plays — it just can't be submitted.
+  session = await startSession();
+  newRun(session ? session.seed : `local-${Math.random().toString(36).slice(2)}`);
+
   state = 'playing';
-  unlock();
   sfx.start();
   updateCamera(0, true);
 }
 
 function endGame() {
   state = 'over';
-  const score = player.maxRow;
+  const score = game.maxRow;
   const isBest = score > best;
-  pendingRun = { score, coins: player.coins };
-  setupScoreboard();
   if (isBest) {
     best = score;
     localStorage.setItem('cc_best', String(best));
     ui.best.textContent = `Best ${best}`;
   }
   ui.finalScore.textContent = score;
-  ui.finalCoins.textContent = player.coins;
+  ui.finalCoins.textContent = game.coins;
   ui.finalBest.textContent = best;
   ui.newBest.classList.toggle('hidden', !isBest);
-  ui.reason.textContent = REASONS[player.deathCause] || 'Game over';
+  ui.reason.textContent = REASONS[game.cause] || 'Game over';
   ui.over.classList.add('show');
+  setupScoreboard();
 }
 
 /* ------------------------------------------------------------- scoreboard */
-
-let pendingRun = { score: 0, coins: 0 };
-let boardOpen = false;
 
 function message(text, kind) {
   ui.submitMsg.textContent = text;
   ui.submitMsg.className = `msg ${kind || ''}`;
 }
 
-// Called on game over: pull the board, and offer to submit if the run counts.
 async function setupScoreboard() {
   message('', '');
   ui.submitBlock.classList.add('hidden');
@@ -162,14 +177,16 @@ async function setupScoreboard() {
     message('Scoreboard offline.', '');
     return;
   }
-  if (state !== 'over') return;                 // player already restarted
+  if (state !== 'over') return;
 
   renderBoard(ui.overBoard, data.top, savedName());
   ui.overBoardBlock.classList.remove('hidden');
 
-  if (pendingRun.score > 0) {
+  if (game.maxRow > 0 && session) {
     ui.nameInput.value = savedName();
     ui.submitBlock.classList.remove('hidden');
+  } else if (game.maxRow > 0) {
+    message('This run was not verified, so it cannot be submitted.', '');
   }
 }
 
@@ -177,23 +194,19 @@ ui.submitForm.addEventListener('submit', async (e) => {
   e.preventDefault();
   const name = ui.nameInput.value.trim();
   if (!name) return message('Enter a name.', 'err');
+  if (!session) return message('This run was not verified.', 'err');
 
   ui.submitBtn.disabled = true;
-  message('Saving…', '');
+  message('Verifying…', '');
   try {
-    const data = await submitScore({ name, score: pendingRun.score, coins: pendingRun.coins });
+    const data = await submitRun({ name, session, inputs, endTick: game.tick });
     rememberName(data.name);
     ui.submitBlock.classList.add('hidden');
     renderBoard(ui.overBoard, data.top, data.name);
     ui.overBoardBlock.classList.remove('hidden');
-    if (data.rank && data.rank <= 10) {
-      message(`#${data.rank} on the board!`, 'ok');
-      ui.overBoardTitle.textContent = 'Top 10';
-    } else if (data.improved) {
-      message(`Saved — your best is ${data.best}. Rank #${data.rank}.`, 'ok');
-    } else {
-      message(`Your best is still ${data.best}. Rank #${data.rank}.`, 'ok');
-    }
+    if (data.rank && data.rank <= 10) message(`#${data.rank} on the board!`, 'ok');
+    else if (data.improved) message(`Saved — your best is ${data.best}. Rank #${data.rank}.`, 'ok');
+    else message(`Your best is still ${data.best}. Rank #${data.rank}.`, 'ok');
     sfx.coin();
   } catch (err) {
     message(err.message, 'err');
@@ -221,14 +234,19 @@ function closeBoard() {
 
 document.getElementById('boardBtn').addEventListener('click', openBoard);
 document.getElementById('boardCloseBtn').addEventListener('click', closeBoard);
+document.getElementById('playBtn').addEventListener('click', startGame);
+document.getElementById('retryBtn').addEventListener('click', startGame);
+ui.sound.addEventListener('click', () => {
+  ui.sound.textContent = toggleSound() ? '🔊' : '🔇';
+});
 
 /* ------------------------------------------------------------------ input */
 
 function handleMove(dir) {
   if (state === 'ready') { startGame(); return; }
-  if (state !== 'playing') return;
+  if (state !== 'playing' || game.dead) return;
   unlock();
-  player.move(dir);
+  if (pending.length < 3) pending.push(dir);
 }
 
 const KEYS = {
@@ -240,7 +258,6 @@ const KEYS = {
 
 window.addEventListener('keydown', (e) => {
   if (e.repeat) return;
-  // Never steer the chicken while someone is typing their name.
   if (e.target instanceof HTMLInputElement) return;
   if (boardOpen) {
     if (e.code === 'Space' || e.code === 'Enter' || e.code === 'Escape') {
@@ -257,43 +274,30 @@ window.addEventListener('keydown', (e) => {
   }
   if (e.code === 'Space' || e.code === 'Enter') {
     e.preventDefault();
-    if (state === 'ready') startGame();
-    else if (state === 'over') startGame();
+    if (state === 'ready' || state === 'over') startGame();
   }
 });
 
-// Tap to hop forward, swipe for a direction.
 let touchStart = null;
 renderer.domElement.addEventListener('pointerdown', (e) => {
   if (state === 'over') return;
-  touchStart = { x: e.clientX, y: e.clientY, t: performance.now() };
+  touchStart = { x: e.clientX, y: e.clientY };
 });
 renderer.domElement.addEventListener('pointerup', (e) => {
   if (!touchStart || state === 'over') { touchStart = null; return; }
   const dx = e.clientX - touchStart.x;
   const dy = e.clientY - touchStart.y;
   touchStart = null;
-  const dist = Math.hypot(dx, dy);
-  if (dist < 26) { handleMove('forward'); return; }
+  if (Math.hypot(dx, dy) < 26) return handleMove('forward');
   if (Math.abs(dx) > Math.abs(dy)) handleMove(dx > 0 ? 'right' : 'left');
   else handleMove(dy < 0 ? 'forward' : 'back');
 });
 
-document.getElementById('playBtn').addEventListener('click', startGame);
-document.getElementById('retryBtn').addEventListener('click', startGame);
-ui.sound.addEventListener('click', () => {
-  const on = toggleSound();
-  ui.sound.textContent = on ? '🔊' : '🔇';
-});
-
 window.addEventListener('resize', resize);
-const MIN_WIDTH = 10.5;                              // columns that must always fit
-
 function resize() {
   const w = window.innerWidth;
   const h = window.innerHeight;
   const aspect = w / h;
-  // On tall/portrait screens, widen the frustum instead of cropping the road.
   const vertical = Math.max(VIEW, MIN_WIDTH / aspect);
   camera.left = (-vertical * aspect) / 2;
   camera.right = (vertical * aspect) / 2;
@@ -312,23 +316,10 @@ const _sunOffset = new THREE.Vector3(-22, 34, 16);
 const _eagleTarget = new THREE.Vector3();
 
 function updateCamera(dt, snap = false) {
-  // Never travel backwards; ease forward toward the chicken.
-  const k = snap ? 1 : 1 - Math.pow(0.0025, dt);
-  const eased = camAnchor + (player.row - camAnchor) * k;
-  camAnchor = Math.max(camAnchor, eased);
-
-  if (state === 'playing' && player.maxRow >= 6) scrollActive = true;
-  if (scrollActive && !player.dead) {
-    const rate = 0.42 + Math.min(0.85, player.maxRow / 320);
-    camAnchor += rate * dt;
-  }
-
-  const wantX = THREE.MathUtils.clamp(player.mesh.position.x * 0.55, -3.2, 3.2);
+  const wantX = THREE.MathUtils.clamp(playerView.mesh.position.x * 0.55, -3.2, 3.2);
   camX += (wantX - camX) * (snap ? 1 : 1 - Math.pow(0.004, dt));
 
-  const focusZ = -(camAnchor + 2.2) * TILE;
-  _target.set(camX, 0, focusZ);
-
+  _target.set(camX, 0, -(game.camAnchor + 2.2) * TILE);
   if (shake > 0) {
     shake = Math.max(0, shake - dt * 2.4);
     _target.x += (Math.random() - 0.5) * shake * 0.5;
@@ -337,73 +328,92 @@ function updateCamera(dt, snap = false) {
 
   camera.position.copy(_target).add(CAM_OFFSET);
   camera.lookAt(_target);
-
   sun.position.copy(_target).add(_sunOffset);
   sun.target.position.copy(_target);
   sun.target.updateMatrixWorld();
 }
 
-let last = performance.now();
-let elapsed = 0;
-
-function frame(now) {
-  requestAnimationFrame(frame);
-  const dt = Math.min(0.05, (now - last) / 1000);
-  last = now;
-  elapsed += dt;
-
-  world.update(dt, elapsed, player.row);
-  player.update(dt, elapsed);
-
-  if (state === 'playing') {
-    if (!player.dead) {
-      world.ensureAhead(player.maxRow);
-      world.recycle(Math.floor(camAnchor));
-
-      if (player.row < camAnchor - EAGLE_MARGIN) {
-        player.die('eagle');
-        launchEagle();
-      }
-      if (player.deathCause === 'car' || player.deathCause === 'train') shake = 1;
-
-      const score = player.maxRow;
-      if (ui.score.textContent !== String(score)) ui.score.textContent = String(score);
-      if (ui.coins.textContent !== String(player.coins)) ui.coins.textContent = String(player.coins);
-    } else {
-      overTimer += dt;
-      if (overTimer > 1.15) endGame();
-    }
-  }
-
-  if (eagle.visible) updateEagle(dt);
-  updateCamera(dt);
-  renderer.render(scene, camera);
-}
-
 function launchEagle() {
   shake = 0.6;
   eagle.visible = true;
-  eagle.position.set(player.mesh.position.x - 4, 7, -player.row * TILE - 4);
+  eagle.position.set(game.x - 4, 7, -game.row * TILE - 4);
   eagle.userData.t = 0;
 }
 
 function updateEagle(dt) {
   eagle.userData.t += dt;
-  const t = eagle.userData.t;
-  const p = player.mesh.position;
+  const p = playerView.mesh.position;
   _eagleTarget.set(p.x - 0.4, p.y + 0.55, p.z);
   eagle.position.lerp(_eagleTarget, Math.min(1, dt * 7));
-  const flap = Math.sin(t * 26) * 0.5;
+  const flap = Math.sin(eagle.userData.t * 26) * 0.5;
   if (eagle.userData.wingL) eagle.userData.wingL.rotation.x = flap;
   if (eagle.userData.wingR) eagle.userData.wingR.rotation.x = -flap;
-  if (t > 3.5) eagle.visible = false;
+  if (eagle.userData.t > 3.5) eagle.visible = false;
 }
 
-// Handy for debugging in the console: __cc.player.row, __cc.world.getRow(n), …
-window.__cc = { player, world, camera, scene, renderer, get state() { return state; }, get camAnchor() { return camAnchor; } };
+let last = performance.now();
+let elapsed = 0;
+let acc = 0;
 
-// Kick things off on the start screen with a live world behind the card.
-world.reset();
-player.reset();
+function frame(now) {
+  requestAnimationFrame(frame);
+  const dt = Math.min(0.25, (now - last) / 1000);
+  last = now;
+  elapsed += dt;
+
+  const wasDead = game.dead;
+
+  if (state === 'playing') {
+    acc += dt;
+    let steps = 0;
+    while (acc >= DT && steps < 8) {          // never spiral after a stall
+      const input = pending.length ? pending.shift() : null;
+      if (input && inputs.length / 2 < MAX_INPUTS) {
+        inputs.push(game.tick, DIRS.indexOf(input));
+      }
+      game.step(input);
+      acc -= DT;
+      steps += 1;
+      if (game.dead) { pending.length = 0; acc = 0; break; }
+    }
+
+    if (!wasDead && game.dead) {
+      if (game.cause === 'eagle') launchEagle();
+      else if (game.cause === 'car' || game.cause === 'train') shake = 1;
+    }
+
+    const score = String(game.maxRow);
+    if (ui.score.textContent !== score) ui.score.textContent = score;
+    const coins = String(game.coins);
+    if (ui.coins.textContent !== coins) ui.coins.textContent = coins;
+
+    if (game.dead) {
+      overTimer += dt;
+      if (overTimer > 1.15) endGame();
+    }
+  }
+
+  const alpha = state === 'playing' && !game.dead ? acc / DT : 0;
+  const t = (game.tick + alpha) * DT;
+
+  worldView.sync(game.row);
+  worldView.update(t, dt, game, game.row);
+  playerView.update(game, alpha, dt, elapsed);
+  if (eagle.visible) updateEagle(dt);
+  updateCamera(dt);
+  renderer.render(scene, camera);
+}
+
+// Something to look at behind the title card.
+worldView.attach(game.world);
+worldView.sync(0);
 updateCamera(0, true);
 requestAnimationFrame((t) => { last = t; frame(t); });
+
+window.__cc = {
+  get game() { return game; },
+  get inputs() { return inputs; },
+  get session() { return session; },
+  get state() { return state; },
+  world: worldView, player: playerView, camera, scene, renderer,
+};

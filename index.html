@@ -113,10 +113,56 @@
     box-shadow:0 6px 0 #d63f34; transition:transform .08s ease, box-shadow .08s ease;
   }
   .btn:active{ transform:translateY(4px); box-shadow:0 2px 0 #d63f34; }
+  .btn.ghost{
+    background:#eef3f7; color:var(--ink); box-shadow:0 4px 0 #d3dde5;
+    font-size:16px; padding:13px; margin-top:10px;
+  }
+  .btn.ghost:active{ box-shadow:0 1px 0 #d3dde5; }
   .keys{
     margin-top:18px; display:flex; gap:16px; justify-content:center; flex-wrap:wrap;
     font-size:12px; font-weight:800; letter-spacing:.06em; text-transform:uppercase; opacity:.5;
   }
+
+  /* ---------- scoreboard ---------- */
+  .submit-row{ display:flex; gap:8px; margin:4px 0 14px; }
+  .submit-row input{
+    flex:1; min-width:0; border:2px solid #e2e9ef; border-radius:14px;
+    padding:13px 14px; font:inherit; font-weight:800; font-size:17px;
+    letter-spacing:.1em; text-transform:uppercase; color:var(--ink);
+    background:#f8fafb; outline:none;
+  }
+  .submit-row input:focus{ border-color:var(--accent2, #34b3f1); background:#fff; }
+  .submit-row input::placeholder{ letter-spacing:.08em; opacity:.38; font-weight:700; }
+  .submit-row button{
+    flex:0 0 auto; width:auto; padding:13px 20px; font-size:16px; border-radius:14px;
+  }
+  .msg{ font-size:13px; font-weight:800; margin:-6px 0 12px; min-height:18px; }
+  .msg.ok{ color:#1f9d55; }
+  .msg.err{ color:var(--accent); }
+
+  .board{ list-style:none; text-align:left; }
+  .board-row{
+    display:flex; align-items:center; gap:10px;
+    padding:9px 12px; border-radius:12px; font-weight:800; font-size:15px;
+  }
+  .board-row:nth-child(odd){ background:#f4f7fa; }
+  .board-rank{
+    flex:0 0 26px; height:26px; border-radius:50%; display:grid; place-items:center;
+    background:#e3eaf0; font-size:12px; font-weight:900;
+  }
+  .medal-1 .board-rank{ background:var(--gold); color:#5a4100; }
+  .medal-2 .board-rank{ background:#cfd8de; }
+  .medal-3 .board-rank{ background:#e2b98a; color:#5a3a12; }
+  .board-name{ flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; letter-spacing:.04em; }
+  .board-coins{ flex:0 0 auto; font-size:12px; font-weight:800; color:#c79512; }
+  .board-score{ flex:0 0 auto; font-variant-numeric:tabular-nums; }
+  .board-row.is-you{ background:#fff1ef; outline:2px solid var(--accent); }
+  .board-empty{ padding:16px; text-align:center; font-weight:700; opacity:.5; font-size:14px; }
+  .board-title{
+    font-size:12px; font-weight:900; letter-spacing:.14em; text-transform:uppercase;
+    opacity:.45; margin:16px 0 8px; text-align:left;
+  }
+  .board-note{ font-size:12px; font-weight:700; opacity:.45; margin-top:12px; }
   kbd{
     display:inline-block; background:#eef3f7; border-radius:6px; padding:3px 7px;
     box-shadow:inset 0 -2px 0 rgba(0,0,0,.08); font-family:inherit; font-size:11px;
@@ -154,6 +200,15 @@
       <span>swipe or tap on mobile</span>
     </div>
     <button class="btn" id="playBtn" style="margin-top:22px">Play</button>
+    <button class="btn ghost" id="boardBtn">Leaderboard</button>
+  </div>
+</div>
+
+<div class="overlay" id="boardScreen">
+  <div class="card">
+    <h1>Top <span>10</span></h1>
+    <ol class="board" id="topBoard" style="margin-top:18px"></ol>
+    <button class="btn" id="boardCloseBtn" style="margin-top:18px">Back</button>
   </div>
 </div>
 
@@ -167,6 +222,22 @@
       <div class="stat"><b id="finalBest">0</b><small>Best</small></div>
     </div>
     <div id="newBest" class="new-best hidden">New personal best!</div>
+
+    <div id="submitBlock" class="hidden">
+      <div class="board-title">Add your score</div>
+      <form class="submit-row" id="submitForm" autocomplete="off">
+        <input id="nameInput" placeholder="Your name" maxlength="10"
+               aria-label="Your name" autocapitalize="characters" spellcheck="false" />
+        <button class="btn" type="submit" id="submitBtn">Submit</button>
+      </form>
+    </div>
+    <div class="msg" id="submitMsg"></div>
+
+    <div id="overBoardBlock" class="hidden">
+      <div class="board-title" id="overBoardTitle">Top 10</div>
+      <ol class="board" id="overBoard"></ol>
+    </div>
+
     <button class="btn" id="retryBtn" style="margin-top:18px">Play Again</button>
     <div class="keys" style="margin-top:14px"><span>press <kbd>space</kbd> to retry</span></div>
   </div>

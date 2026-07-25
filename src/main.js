@@ -6,6 +6,7 @@ import { World } from './world.js';
 import { Player } from './player.js';
 import * as M from './models.js';
 import { sfx, unlock, toggle as toggleSound, isEnabled } from './audio.js';
+import { fetchTop, submitScore, renderBoard, savedName, rememberName } from './leaderboard.js';
 
 /* ------------------------------------------------------------------ setup */
 
@@ -65,6 +66,16 @@ const ui = {
   newBest: document.getElementById('newBest'),
   reason: document.getElementById('deathReason'),
   sound: document.getElementById('sound'),
+  boardScreen: document.getElementById('boardScreen'),
+  topBoard: document.getElementById('topBoard'),
+  submitBlock: document.getElementById('submitBlock'),
+  submitForm: document.getElementById('submitForm'),
+  submitBtn: document.getElementById('submitBtn'),
+  nameInput: document.getElementById('nameInput'),
+  submitMsg: document.getElementById('submitMsg'),
+  overBoardBlock: document.getElementById('overBoardBlock'),
+  overBoardTitle: document.getElementById('overBoardTitle'),
+  overBoard: document.getElementById('overBoard'),
 };
 
 const REASONS = {
@@ -98,6 +109,10 @@ function startGame() {
   ui.coins.textContent = '0';
   ui.start.classList.remove('show');
   ui.over.classList.remove('show');
+  closeBoard();
+  ui.submitBlock.classList.add('hidden');
+  ui.overBoardBlock.classList.add('hidden');
+  message('', '');
   state = 'playing';
   unlock();
   sfx.start();
@@ -108,6 +123,8 @@ function endGame() {
   state = 'over';
   const score = player.maxRow;
   const isBest = score > best;
+  pendingRun = { score, coins: player.coins };
+  setupScoreboard();
   if (isBest) {
     best = score;
     localStorage.setItem('cc_best', String(best));
@@ -120,6 +137,90 @@ function endGame() {
   ui.reason.textContent = REASONS[player.deathCause] || 'Game over';
   ui.over.classList.add('show');
 }
+
+/* ------------------------------------------------------------- scoreboard */
+
+let pendingRun = { score: 0, coins: 0 };
+let boardOpen = false;
+
+function message(text, kind) {
+  ui.submitMsg.textContent = text;
+  ui.submitMsg.className = `msg ${kind || ''}`;
+}
+
+// Called on game over: pull the board, and offer to submit if the run counts.
+async function setupScoreboard() {
+  message('', '');
+  ui.submitBlock.classList.add('hidden');
+  ui.overBoardBlock.classList.add('hidden');
+  ui.overBoardTitle.textContent = 'Top 10';
+
+  let data;
+  try {
+    data = await fetchTop();
+  } catch {
+    message('Scoreboard offline.', '');
+    return;
+  }
+  if (state !== 'over') return;                 // player already restarted
+
+  renderBoard(ui.overBoard, data.top, savedName());
+  ui.overBoardBlock.classList.remove('hidden');
+
+  if (pendingRun.score > 0) {
+    ui.nameInput.value = savedName();
+    ui.submitBlock.classList.remove('hidden');
+  }
+}
+
+ui.submitForm.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const name = ui.nameInput.value.trim();
+  if (!name) return message('Enter a name.', 'err');
+
+  ui.submitBtn.disabled = true;
+  message('Saving…', '');
+  try {
+    const data = await submitScore({ name, score: pendingRun.score, coins: pendingRun.coins });
+    rememberName(data.name);
+    ui.submitBlock.classList.add('hidden');
+    renderBoard(ui.overBoard, data.top, data.name);
+    ui.overBoardBlock.classList.remove('hidden');
+    if (data.rank && data.rank <= 10) {
+      message(`#${data.rank} on the board!`, 'ok');
+      ui.overBoardTitle.textContent = 'Top 10';
+    } else if (data.improved) {
+      message(`Saved — your best is ${data.best}. Rank #${data.rank}.`, 'ok');
+    } else {
+      message(`Your best is still ${data.best}. Rank #${data.rank}.`, 'ok');
+    }
+    sfx.coin();
+  } catch (err) {
+    message(err.message, 'err');
+  } finally {
+    ui.submitBtn.disabled = false;
+  }
+});
+
+async function openBoard() {
+  boardOpen = true;
+  ui.boardScreen.classList.add('show');
+  ui.topBoard.innerHTML = '<li class="board-empty">Loading…</li>';
+  try {
+    const data = await fetchTop();
+    renderBoard(ui.topBoard, data.top, savedName());
+  } catch {
+    ui.topBoard.innerHTML = '<li class="board-empty">Scoreboard offline.</li>';
+  }
+}
+
+function closeBoard() {
+  boardOpen = false;
+  ui.boardScreen.classList.remove('show');
+}
+
+document.getElementById('boardBtn').addEventListener('click', openBoard);
+document.getElementById('boardCloseBtn').addEventListener('click', closeBoard);
 
 /* ------------------------------------------------------------------ input */
 
@@ -139,6 +240,15 @@ const KEYS = {
 
 window.addEventListener('keydown', (e) => {
   if (e.repeat) return;
+  // Never steer the chicken while someone is typing their name.
+  if (e.target instanceof HTMLInputElement) return;
+  if (boardOpen) {
+    if (e.code === 'Space' || e.code === 'Enter' || e.code === 'Escape') {
+      e.preventDefault();
+      closeBoard();
+    }
+    return;
+  }
   const dir = KEYS[e.code];
   if (dir) {
     e.preventDefault();

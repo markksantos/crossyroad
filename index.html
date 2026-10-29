@@ -181,6 +181,8 @@
     padding:6px 12px; border-radius:999px;
   }
   .hidden{ display:none !important; }
+  .privacy-link{ color:inherit; text-decoration:underline; text-underline-offset:2px; }
+  .card-foot{ margin-top:14px; font-size:12px; font-weight:700; opacity:.5; }
 </style>
 </head>
 <body>
@@ -208,6 +210,7 @@
     </div>
     <button class="btn" id="playBtn" style="margin-top:22px">Play</button>
     <button class="btn ghost" id="boardBtn">Leaderboard</button>
+    <div class="card-foot"><a class="privacy-link" href="https://nosleeplab.com/privacy" target="_blank" rel="noopener">Privacy</a></div>
   </div>
 </div>
 
@@ -237,7 +240,7 @@
                aria-label="Your name" autocapitalize="characters" spellcheck="false" />
         <button class="btn" type="submit" id="submitBtn">Submit</button>
       </form>
-      <p style="font-size:12px;opacity:.7;margin:6px 0 0">Your name and score show on the public leaderboard. Don't use your real name.</p>
+      <p style="font-size:12px;opacity:.7;margin:6px 0 0">Your name and score show on the public leaderboard. Don't use your real name. <a class="privacy-link" href="https://nosleeplab.com/privacy" target="_blank" rel="noopener">Privacy</a></p>
     </div>
     <div class="msg" id="submitMsg"></div>
 
